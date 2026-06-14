@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import py_compile; py_compile.compile\\('thesis_formatter.py', doraise=True\\); print\\('Syntax OK'\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 thesis_formatter.py \"E:\\\\edge\\\\药明康德有摘要版.docx\" \"E:\\\\edge\\\\药明康德有摘要版_已格式化_v2.docx\" --doc-title=\"药明康德财务分析报告\")"
+    ]
+  }
+}
