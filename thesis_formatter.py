@@ -943,7 +943,23 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False,
 
         print(f"[4d] Keywords formatted: P{keywords_idx}")
 
-    # ── Step 4e: Rename Chinese numeral H1 headings to Arabic ──
+    # ── Step 4e: Insert TOC placeholder after keywords (XSYU mode only) ──
+    # Creates a blank paragraph that serves as the TOC section between
+    # the abstract section (no page numbers) and body chapters.
+    toc_placeholder_idx = None
+    if mode == 'xsyu_thesis' and keywords_idx is not None:
+        toc_p = OxmlElement('w:p')
+        # Add an empty run so the paragraph exists but has no visible text
+        toc_r = OxmlElement('w:r')
+        toc_p.append(toc_r)
+        doc.paragraphs[keywords_idx]._element.addnext(toc_p)
+        toc_placeholder_idx = keywords_idx + 1
+        # Shift indices for affected elements
+        if abstract_body_idx is not None and abstract_body_idx > keywords_idx:
+            abstract_body_idx += 1
+        print(f"[4e] TOC placeholder inserted at P{toc_placeholder_idx} (XSYU mode)")
+
+    # ── Step 4f: Rename Chinese numeral H1 headings to Arabic ──
     #  一、XXX → 1. XXX,  二、XXX → 2. XXX, etc.
     h1_renamed = 0
     for i, p in enumerate(doc.paragraphs):
@@ -1006,11 +1022,41 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False,
 
     # Recalculate section break positions with correct cover_end
     section_break_paras = set()
-    section_plan = [{'title': '封面与摘要', 'is_front_matter': True}]  # Section 0 = front matter
+    section_plan = []  # Built below, maps section index → info dict
+
+    # ── Helper: find the last non-empty paragraph before a given index ──
+    def find_prev_para(idx):
+        pre = idx - 1
+        while pre >= 0 and not doc.paragraphs[pre].text.strip():
+            pre -= 1
+        return pre
 
     if mode == 'xsyu_thesis':
-        # XSYU mode: section break before EVERY H1 that is NOT front matter
-        # (摘要/ABSTRACT stay in section 0 with the cover)
+        # XSYU thesis mode section structure:
+        #   Section 0: Cover + Abstract + Keywords (NO page numbers)
+        #   Section 1: TOC placeholder (Roman numerals, odd="目录" / even=school name)
+        #   Section 2+: Each chapter in its own section (Arabic, odd/even headers)
+        #
+        # Break 1: After keywords → separates abstract from TOC
+        # Break 2: At TOC placeholder → separates TOC from body
+        # Break 3+: Before each non-front-matter H1 → separates chapters
+
+        section_plan = [{'title': '封面与摘要', 'section_type': 'abstract'}]
+
+        # Break 1: After keywords (abstract section end)
+        if keywords_idx is not None and keywords_idx > 0:
+            section_break_paras.add(keywords_idx)
+        elif toc_placeholder_idx is not None and toc_placeholder_idx > 0:
+            pre = find_prev_para(toc_placeholder_idx)
+            if pre >= 0:
+                section_break_paras.add(pre)
+
+        # Break 2: At TOC placeholder (TOC section end)
+        if toc_placeholder_idx is not None:
+            section_break_paras.add(toc_placeholder_idx)
+            section_plan.append({'title': '目录', 'section_type': 'toc'})
+
+        # Break 3+: Before each non-front-matter H1
         for idx in sorted(heading_map):
             if heading_map[idx] != 'Heading 1':
                 continue
@@ -1023,21 +1069,36 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False,
             )
             if is_front_matter:
                 continue
-            # Insert section break immediately before this heading
-            if idx > 0:
-                pre = idx - 1
-                while pre >= 0 and not doc.paragraphs[pre].text.strip():
-                    pre -= 1
-                if pre >= 0 and pre not in section_break_paras:
-                    section_break_paras.add(pre)
-                    section_plan.append({
-                        'title': t,
-                        'is_front_matter': False
-                    })
+            pre = find_prev_para(idx)
+            if pre >= 0 and pre not in section_break_paras:
+                section_break_paras.add(pre)
+                section_plan.append({
+                    'title': t,
+                    'section_type': 'chapter'
+                })
+
     elif mode == 'homework':
-        # Homework mode: no section breaks — entire document is one continuous section
-        section_break_paras = set()
-        section_plan = [{'title': course_title or doc_title, 'is_front_matter': False}]
+        # Homework mode section structure:
+        #   Section 0: Cover + Abstract + Keywords (NO page numbers)
+        #   Section 1: Body chapters + 致谢 + 附录 (header=course, footer=PAGE from 1)
+        #   Section 2: References (header=course, footer=PAGE continuous)
+        #
+        # Break 1: After keywords (abstract → body)
+        # Break 2: Before 参考文献 (body → references)
+
+        section_plan = [{'title': '封面与摘要', 'section_type': 'abstract'}]
+
+        # Break 1: After keywords
+        if keywords_idx is not None and keywords_idx > 0:
+            section_break_paras.add(keywords_idx)
+        section_plan.append({'title': course_title or doc_title, 'section_type': 'body'})
+
+        # Break 2: Before 参考文献
+        if ref_idx is not None and ref_idx > 0:
+            pre = find_prev_para(ref_idx)
+            if pre >= 0 and pre not in section_break_paras:
+                section_break_paras.add(pre)
+                section_plan.append({'title': '参考文献', 'section_type': 'references'})
 
     # Apply Heading styles to cover-area headings (before cover_end)
     for idx in sorted(heading_map):
@@ -1166,41 +1227,60 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False,
     print(f"[10] Reloaded: {num_sections} sections detected, mode={mode}")
 
     # Configure headers/footers per section (mode-dependent)
+    page_number_restarted = False  # Track whether Arabic page numbers have been restarted
+
     for i, sec in enumerate(doc2.sections):
-        # Get section info from plan (may have fewer entries than actual sections)
-        info = section_plan[i] if i < len(section_plan) else {
-            'title': course_title or doc_title,
-            'is_front_matter': False
-        }
+        # Get section info from plan (fallback if plan has fewer entries)
+        if i < len(section_plan):
+            info = section_plan[i]
+        else:
+            info = {'title': course_title or doc_title, 'section_type': 'chapter'}
 
         if mode == 'homework':
-            # Simple: every section gets same header + continuous page numbers
-            set_section_header(sec, course_title or doc_title, size_pt=10.5)
-            set_section_footer_page_number(sec, size_pt=10.5)
-            if i == 0:
-                set_page_number_restart(sec, 1)
-            print(f"  Section {i}: header='{course_title or doc_title}', footer=page#")
+            if info.get('section_type') == 'abstract':
+                # Section 0: Cover + Abstract — NO page numbers, NO header
+                clear_header_footer(sec)
+                print(f"  Section {i} (abstract): no header, no page numbers")
+            else:
+                # Section 1+: Body / References — header + page numbers
+                set_section_header(sec, course_title or doc_title, size_pt=10.5)
+                set_section_footer_page_number(sec, size_pt=10.5)
+                if not page_number_restarted:
+                    set_page_number_restart(sec, 1)
+                    page_number_restarted = True
+                print(f"  Section {i} ({info.get('section_type')}): header='{course_title or doc_title}', footer=page#")
 
         elif mode == 'xsyu_thesis':
-            if info['is_front_matter']:
-                # Front matter: no header, Roman numeral page numbers
+            stype = info.get('section_type', 'chapter')
+
+            if stype == 'abstract':
+                # Abstract section: NO page numbers, NO header at all
                 clear_header_footer(sec)
+                print(f"  Section {i} (abstract): no header, no page numbers")
+
+            elif stype == 'toc':
+                # TOC section: Roman numeral page numbers, odd/even headers
+                enable_even_odd_headers(sec)
+                set_section_header(sec, '目录', size_pt=10.5)                   # odd pages
+                set_section_even_header(sec, '西安石油大学本科毕业设计(论文)', size_pt=10.5)  # even
                 set_section_footer_page_number(sec, size_pt=10.5)
-                set_page_number_format(sec, 'upperRoman')
-                print(f"  Section {i} (front matter): Roman numerals, no header")
+                set_page_number_format(sec, 'upperRoman', start=1)
+                print(f"  Section {i} (TOC): Roman numerals from I, odd='目录', even='西安石油大学本科毕业设计(论文)'")
+
             else:
-                # Body chapter: odd/even headers
+                # Body chapter section: Arabic page numbers, odd/even headers
                 enable_even_odd_headers(sec)
                 chapter_title = info['title']
-                set_section_header(sec, chapter_title, size_pt=10.5)         # odd pages
-                set_section_even_header(sec, "西安石油大学本科毕业设计(论文)", size_pt=10.5)  # even
+                set_section_header(sec, chapter_title, size_pt=10.5)             # odd pages
+                set_section_even_header(sec, '西安石油大学本科毕业设计(论文)', size_pt=10.5)  # even
                 set_section_footer_page_number(sec, size_pt=10.5)
-                if i == 1:
-                    # First body section: restart page numbering at 1 (decimal)
+                if not page_number_restarted:
+                    # First body chapter: restart Arabic page numbering at 1
                     set_page_number_format(sec, 'decimal', start=1)
+                    page_number_restarted = True
                 else:
                     set_page_number_format(sec, 'decimal')
-                print(f"  Section {i}: odd='{chapter_title}', even='西安石油大学本科毕业设计(论文)'")
+                print(f"  Section {i} ({stype}): odd='{chapter_title}', even='西安石油大学本科毕业设计(论文)'")
 
     # ── Step 9: Save final ──
     doc2.save(output_path)
@@ -1216,11 +1296,15 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False,
     print(f"Mode: {mode}")
     print(f"Sections: {num_sections}")
     if mode == 'xsyu_thesis':
-        print(f"Front matter: Roman numeral pages (Ⅰ, Ⅱ, Ⅲ...)")
-        print(f"Body chapters: odd/even headers, Arabic page numbers from 1")
+        print(f"  Section 0 (abstract): no page numbers, no header")
+        print(f"  Section 1 (TOC): Roman numerals (Ⅰ,Ⅱ,Ⅲ...), odd='目录', even='西安石油大学本科毕业设计(论文)'")
+        print(f"  Sections 2+ (chapters): Arabic page numbers from 1, odd/even headers")
+        print(f"  NOTE: After formatting, open in Word and insert TOC (References → Table of Contents)")
+        print(f"        at the TOC placeholder between abstract and first chapter.")
     else:
-        print(f"Header: '{course_title or doc_title}'")
-        print(f"Continuous page numbers, no section breaks")
+        print(f"  Section 0 (abstract): no page numbers, no header")
+        print(f"  Section 1 (body): header='{course_title or doc_title}', page numbers from 1")
+        print(f"  Section 2 (references): header='{course_title or doc_title}', continuous page numbers")
     if not no_toc:
         print(f"TOC: Insert in Word → References → Table of Contents → Auto Table")
     print(f"{'='*60}")

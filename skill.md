@@ -169,3 +169,26 @@ Simplified format for daily assignments:
 - Formatting-based fallback detects headings by font size/bold/alignment when regex fails
 - （1）（2）no longer treated as H3
 - Chapter heading auto-detection now includes: 第一章/第X章, 第一节/第X节, bare numerals
+
+## Version History
+
+### v3.2 (2026-06-15)
+- **Section structure overhaul**:
+  - XSYU mode: Abstract section NO page numbers; TOC section gets Roman numerals (Ⅰ,Ⅱ,Ⅲ...) + odd/even headers ("目录"/"西安石油大学本科毕业设计(论文)"); Body chapters restart Arabic at 1
+  - Homework mode: 2 section breaks (after abstract, before references); Abstract section NO page numbers
+- **TOC placeholder**: Auto-inserts blank paragraph after keywords in XSYU mode for TOC insertion area
+- **Page numbering fix**: Uses flag-based restart logic instead of hardcoded section index
+- **Section plan alignment fix**: No phantom TOC entry when placeholder is absent
+
+### v3.1 (2026-06-15)
+- **New heading patterns**: 第一章/第X章 (H1), 第一节/第X节 (H2), bare Chinese/Arabic numerals (H1)
+- **Formatting inference fallback**: Detects headings by font size/bold/alignment when regex fails
+- **Mode system**: `--mode=xsyu_thesis|homework` with different section/header/footer/page-numbering schemes
+- **XSYU mode**: Per-chapter section breaks, odd/even page headers, Roman numeral front matter
+- **Homework mode**: Simple continuous formatting, course-title header
+- **Enhanced markdown cleanup**: Strips `__bold__` and `~~strike~~` artifacts
+- **Special headings expanded**: 目录, 鸣谢, 附录一~五
+- **Streamlit UI**: Mode selector with conditional inputs
+
+### v3.0 (initial release)
+- Core formatting pipeline, 2 section breaks, H1/H2/H3 detection, cover formatting
