@@ -6,22 +6,55 @@ from pathlib import Path
 
 # 将当前目录加入 sys.path，以便导入 thesis_formatter 模块
 sys.path.insert(0, str(Path(__file__).parent))
-from thesis_formatter import format_thesis  # 修正：原为 format_document
+from thesis_formatter import format_thesis
 
 st.set_page_config(page_title="论文格式一键排版工具", page_icon="📄")
-st.title("📄 西安石油大学论文格式一键排版")
-st.markdown("上传 Word 文档，自动按照学校模板调整页边距、标题样式、页眉页脚、页码等。")
+st.title("📄 论文格式一键排版工具")
+st.markdown("上传 Word 文档，自动按照模板调整页边距、标题样式、页眉页脚、页码等。")
 
 # 侧边栏参数
 with st.sidebar:
     st.header("⚙️ 参数设置")
-    doc_title = st.text_input("文档标题（页眉文字）", value="论文")
+
+    # 排版模式选择
+    mode = st.radio(
+        "排版模式",
+        options=["xsyu_thesis", "homework"],
+        format_func=lambda x: "🎓 西安石油大学毕业论文模式" if x == "xsyu_thesis" else "📝 日常大作业模式",
+        index=0
+    )
+
+    # 根据模式显示不同的输入项
+    if mode == "homework":
+        course_title = st.text_input("课程名称（页眉文字）", value="课程作业")
+        doc_title = course_title
+    else:
+        doc_title = st.text_input("论文标题（页眉文字）", value="论文")
+        course_title = None
+
     st.markdown("---")
-    st.markdown("**说明**：")
+    st.markdown("**📋 模式说明**：")
+
+    if mode == "xsyu_thesis":
+        st.markdown("- 封面+摘要：罗马数字页码（Ⅰ, Ⅱ, Ⅲ...）")
+        st.markdown("- 正文各章：独立节，节间自动分节")
+        st.markdown("- 奇数页页眉：**章节标题**")
+        st.markdown("- 偶数页页眉：**西安石油大学本科毕业设计(论文)**")
+        st.markdown("- 正文页码从1开始（阿拉伯数字）")
+        st.markdown("- 自动识别：第一章/一、/1. /摘要 等标题格式")
+    else:
+        st.markdown("- 无章节分节符，文档为单一节")
+        st.markdown("- 页眉为课程名称，居中显示")
+        st.markdown("- 连续页码，从第1页开始")
+        st.markdown("- 无奇偶页区分")
+        st.markdown("- 自动识别各类标题格式")
+
+    st.markdown("---")
+    st.markdown("**📌 通用说明**：")
     st.markdown("- 仅支持 `.docx` 格式")
     st.markdown("- 自动处理封面、摘要、正文、参考文献样式")
-    st.markdown("- 正文部分不会插入分页符，章节连续排列")
-    st.markdown("- 处理完成后可下载新文档")
+    st.markdown("- 自动清除 Markdown 残留标记")
+    st.markdown("- 章节之间不插入分页符（连续排列）")
 
 # 主区域：文件上传
 uploaded_file = st.file_uploader("选择 Word 文档 (.docx)", type=["docx"])
@@ -38,12 +71,13 @@ if uploaded_file is not None:
     if st.button("✨ 开始格式化", type="primary"):
         with st.spinner("正在处理，请稍候..."):
             try:
-                # 调用核心函数，修正为 format_thesis
                 format_thesis(
                     input_path=input_path,
                     output_path=output_path,
                     doc_title=doc_title,
-                    no_toc=False   # 保留目录提示，不自动生成
+                    no_toc=False,
+                    mode=mode,
+                    course_title=course_title if mode == "homework" else None
                 )
                 st.success("✅ 格式化完成！")
 
@@ -66,4 +100,4 @@ if uploaded_file is not None:
                 except:
                     pass
 else:
-    st.info("👆 请先上传 .docx 文件")
+    st.info("👆 请先上传 .docx 文件，然后点击「开始格式化」")

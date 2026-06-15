@@ -12,12 +12,33 @@ Just say: `帮我格式化这篇论文：E:\path\to\文件.docx`
 
 **Method 2: CLI**
 ```bash
-python3 ~/.claude/skills/thesis-formatter/thesis_formatter.py "input.docx" ["output.docx"] [--doc-title="标题"] [--no-toc]
+python3 thesis_formatter.py "input.docx" ["output.docx"] [--doc-title="标题"] [--no-toc] [--mode={xsyu_thesis|homework}] [--course-title="课程名"]
 ```
 
 Options:
-- `--doc-title="XXX"` — sets header text and document title (default: "论文")
+- `--doc-title="XXX"` — sets header text (default: "论文")
 - `--no-toc` — skip TOC generation message
+- `--mode=xsyu_thesis|homework` — formatting mode (default: xsyu_thesis)
+- `--course-title="XXX"` — course name for header in homework mode
+
+## Formatting Modes
+
+### 🎓 XSYU Thesis Mode (`--mode=xsyu_thesis`, default)
+Formal Xi'an Shiyou University bachelor's thesis format:
+- **Front matter** (cover + abstract + TOC): Roman numeral page numbers (Ⅰ, Ⅱ, Ⅲ...), no headers
+- **Body chapters**: Each chapter in its own section, odd/even page headers
+  - Odd pages: chapter title, 宋体五号居中
+  - Even pages: "西安石油大学本科毕业设计(论文)", 宋体五号居中
+- **Page numbering**: Front matter = Roman; Body = Arabic starting from 1
+- **Section breaks**: Before every chapter heading (except 摘要/ABSTRACT)
+
+### 📝 Homework Mode (`--mode=homework`)
+Simplified format for daily assignments:
+- No section breaks between chapters
+- One continuous section
+- Header: user-specified course name, 宋体五号居中
+- Simple continuous page numbering from page 1
+- No odd/even page differentiation
 
 ## What It Does (完整功能)
 
@@ -45,19 +66,19 @@ Options:
 
 ### 3. Section & Page Breaks
 
-**分节符 (Section Breaks)** — v3.0 仅保留2处:
-- **摘要后 / 正文第一章前**: 封面+摘要独立成节
-- **参考文献前**: 参考文献与正文分节
+**XSYU 毕业论文模式**:
+- **每个一级章标题前**插入分节符（除摘要/ABSTRACT外）
+- 封面+摘要独立成节（罗马数字页码）
+- 参考文献/致谢/附录各自成节
+- 每个正文节：奇偶页不同页眉
+- 章节之间不插入分页符（自然连续流动）
 
-文档仅3节，每节页眉页脚配置:
-- 第0节 (封面+摘要): **无页眉、无页脚、无页码**
-- 第1节 (正文1-N章+附录): 页眉=文档标题 + 页脚=页码（**从1开始**）
-- 第2节 (参考文献): 页眉=文档标题 + 页脚=页码（连续编号）
-- **所有节均取消"链接到上一节"**
+**日常大作业模式**:
+- 不插入任何分节符，全文统一为一节
+- 单一页眉（课程名称），连续页码
 
-**分页符 (Page Breaks)** — v3.0 已取消:
+**分页符 (Page Breaks)** — 已取消:
 - 章节之间不再插入分页符 — 章节自然连续流动，页面充实
-- 仅通过2处分节符做结构性分隔
 
 ### 4. Styles
 
@@ -75,25 +96,43 @@ Options:
 - 插入后右键TOC → "更新域" → "更新整个目录"
 
 ### 6. Headers & Footers
-- 封面节: 无页眉、无页脚
-- 正文节: 页眉=文档标题 (宋体+TNR, 五号 10.5pt, 居中)
-- 正文节: 页脚=PAGE域 (TNR, 五号 10.5pt, 居中)
+
+**XSYU 毕业论文模式**:
+- 封面+摘要节: 无页眉，罗马数字页码（Ⅰ,Ⅱ,Ⅲ...），宋体五号居中
+- 正文各章独立节:
+  - 奇数页页眉: 章节标题 (宋体, 五号 10.5pt, 居中)
+  - 偶数页页眉: "西安石油大学本科毕业设计(论文)" (宋体, 五号 10.5pt, 居中)
+  - 页脚: PAGE域 (阿拉伯数字, 宋体五号, 居中)
 - 所有节均取消"链接到上一节"
+
+**日常大作业模式**:
+- 全部节: 页眉=课程名称 (宋体, 五号 10.5pt, 居中)
+- 页脚: PAGE域 (阿拉伯数字, 宋体五号, 居中, 从1开始)
 
 ### 7. Auto-Detection
 
 **Heading 1** (一级标题):
-- 一、二、三... (中文数字编号) → **自动转为 1. 2. 3. (阿拉伯数字)**
-- 1. / 2. / 3. ... (阿拉伯数字编号，与 1.1 的区分：数字后不跟第二个数字)
-- 摘要 / ABSTRACT / 参考文献 / 致谢 / 绪论 / 引言 / 前言 / 结论 / 附录X
+- 第一章 / 第二章 / 第1章... (第X章格式) 🆕
+- 一、二、三... / 十一、二十一、 (中文数字编号) → **自动转为 1. 2. 3. (阿拉伯数字)**
+- 一 (纯中文数字，后跟空格) 🆕
+- 1. / 2. / 3. ... (阿拉伯数字编号，与 1.1 区分)
+- 1 (纯数字，后跟空格) 🆕
+- 摘要 / ABSTRACT / 参考文献 / 致谢 / 谢辞 / 绪论 / 引言 / 前言 / 结论 / 目录 / 鸣谢 / 附录X
 
 **Heading 2** (二级标题):
+- 第一节 / 第二节 / 第1节... (第X节格式) 🆕
 - （一）（二）（三）... (中文括号编号)
 - 1.1 / 2.3 (数字编号，需有空格后缀)
 
 **Heading 3** (三级标题):
 - 1.1.1 / 2.3.4 (数字编号，需有空格后缀)
 - ~~（1）（2）~~ — v3.0 已移除（避免正文枚举被误识别）
+
+**Formatting-based fallback** 🆕:
+- 当文本匹配失败时，自动检测段落字体格式：
+  - 居中 + 加粗 + 字号 ≥ 15pt → Heading 1
+  - 加粗 + 字号 ≥ 14pt → Heading 2
+  - 加粗 + 字号 ≥ 12pt → Heading 3
 
 **Cover page**: 第一个非摘要 Heading 1 之前的所有段落
 **References**: "参考文献" 标题之后的段落 → List Paragraph 样式
@@ -124,6 +163,9 @@ Options:
 - H1 中文数字标题（一、二...）自动转为阿拉伯数字（1. 2...），其余文字内容不变
 - Auto-creates .backup.docx before overwriting
 - If Word has the file open, save to a different filename
-- 仅2处分节符（摘要后 + 参考文献前），章节间无分页符
+- 两种排版模式可选：毕业论文模式（分节+奇偶页眉+罗马页码）vs 大作业模式（简单连续）
 - Cover abstract is auto-split if combined with heading in one paragraph
-- Supports standard (1.1/1.1.1) and Chinese (（一）) heading formats; （1）（2）no longer treated as H3
+- Supports standard (1.1/1.1.1) and Chinese (（一）/第一章/第一节) heading formats
+- Formatting-based fallback detects headings by font size/bold/alignment when regex fails
+- （1）（2）no longer treated as H3
+- Chapter heading auto-detection now includes: 第一章/第X章, 第一节/第X节, bare numerals

@@ -40,18 +40,31 @@ MARGIN_BOT_EMU   = int(2.5 * 360000)   # 2.5cm
 # Actually python-docx uses EMU. Cm(3.0) = 3*360000 = 1080000 EMU
 # Let's use the Cm() helper for margins and convert to int for XML
 
-# Heading detection patterns
-# Heading 1 patterns: 一、二、三... / 摘要 / ABSTRACT / 参考文献 / etc.
-H1_CN = re.compile(r'^[一-鿿]{1,2}[、．\.]')
-H1_NUM = re.compile(r'^[1-9]\d*[\.\、](?!\d)')       # 1. / 2、 (not 1.1/2.3)
-SPECIAL_H1 = {'摘要', 'ABSTRACT', 'Abstract', '参考文献', '致谢', '谢辞',
-              '绪论', '引言', '前言', '结论'}
+# ── Heading detection patterns ─────────────────────────────
+# Chinese numeral characters (used across multiple regex patterns)
+CN_NUM_CHARS = '一二三四五六七八九十百千'
+
+# Heading 1 patterns: 一、二、三... / 第一章 / 摘要 / ABSTRACT / 参考文献 / etc.
+H1_CN = re.compile(rf'^[{CN_NUM_CHARS}]+[、．\.]')     # 一、, 十一．, 二十一、
+H1_DI_ZHANG  = re.compile(rf'^第[{CN_NUM_CHARS}\d]+章') # 第一章, 第1章, 第十一章
+H1_CN_SPACE  = re.compile(rf'^[{CN_NUM_CHARS}]{{1,3}}\s') # 一 (bare, space after)
+H1_NUM_SPACE = re.compile(r'^[1-9]\d*\s(?!\d)')         # 1 Introduction (no dot after number)
+H1_NUM = re.compile(r'^[1-9]\d*[\.\、](?!\d)')          # 1. / 2、 (not 1.1/2.3)
+SPECIAL_H1 = {
+    '摘要', 'ABSTRACT', 'Abstract', '参考文献', '致谢', '谢辞',
+    '绪论', '引言', '前言', '结论',
+    '目 录', '目录',           # TOC entries
+    '鸣谢',                     # alternative thanks
+    '附录一', '附录二', '附录三', '附录四', '附录五',
+}
 
 # Heading 2 patterns:
 #   Standard: 1.1 / 2.3 (需在数字编号后有空格的章节标题)
 #   Chinese: （一）（二）（三）...
+#   第X节: 第一节, 第二节, 第1节, etc.
 H2_NUM = re.compile(r'^[1-9]\d*\.\d+\s')          # 1.1 XXX
 H2_CN  = re.compile(r'^（[一二三四五六七八九十]+）')  # （一）XXX
+H2_DI_JIE = re.compile(rf'^第[{CN_NUM_CHARS}\d]+节') # 第一节
 
 # Heading 3 patterns:
 #   Standard: 1.1.1 / 2.3.4
@@ -59,7 +72,7 @@ H2_CN  = re.compile(r'^（[一二三四五六七八九十]+）')  # （一）XXX
 #         starting with （N）are typically enumeration points, not headings.
 H3_NUM = re.compile(r'^[1-9]\d*\.\d+\.\d+\s')     # 1.1.1 XXX
 
-# Headings that trigger a section break before them
+# Headings that trigger a section break before them (legacy, now mode-dependent)
 SECTION_BREAK_SPECIAL = {'参考文献', '致谢', '谢辞'}
 
 # Chinese numeral → Arabic conversion
@@ -192,6 +205,8 @@ def config_style(style, size, bold, alignment, first_indent=None,
 MD_HEADING = re.compile(r'^(#{1,3})\s+')
 MD_BOLD = re.compile(r'\*\*(.+?)\*\*')
 MD_ITALIC = re.compile(r'\*(.+?)\*')
+MD_BOLD_ALT = re.compile(r'__(.+?)__')       # alternate bold (AI-generated)
+MD_STRIKE = re.compile(r'~~(.+?)~~')          # strikethrough
 
 
 def strip_md(text):
@@ -200,13 +215,15 @@ def strip_md(text):
     s = MD_HEADING.sub('', s).strip()
     s = MD_BOLD.sub(r'\1', s)
     s = MD_ITALIC.sub(r'\1', s)
+    s = MD_BOLD_ALT.sub(r'\1', s)
+    s = MD_STRIKE.sub(r'\1', s)
     return s.strip()
 
 
 def clean_document_markdown(doc):
     """Remove markdown artifacts from ALL paragraphs in the document.
     - Strips ### / ## / # heading prefixes from first text run
-    - Removes **bold** and *italic* markers from all runs
+    - Removes **bold**, *italic*, __bold_alt__, and ~~strikethrough~~ markers from all runs
     Returns number of modified paragraphs."""
     cleaned = 0
     for p in doc.paragraphs:
@@ -214,7 +231,8 @@ def clean_document_markdown(doc):
         if not text:
             continue
         # Only process paragraphs that actually have markdown artifacts
-        if not ('#' in text[:6] or '**' in text or '*' in text):
+        if not ('#' in text[:6] or '**' in text or '*' in text
+                or '__' in text or '~~' in text):
             continue
 
         modified = False
@@ -231,13 +249,16 @@ def clean_document_markdown(doc):
                         modified = True
                     break  # Only strip from first text element
 
-        # Phase 2: Strip ** and * markers from all runs
+        # Phase 2: Strip **, *, __, and ~~ markers from all runs
         for run_elem in runs:
             t_elems = run_elem.findall(qn('w:t'))
             for t in t_elems:
-                if t.text and ('**' in t.text or '*' in t.text):
+                if t.text and ('**' in t.text or '*' in t.text
+                               or '__' in t.text or '~~' in t.text):
                     t.text = MD_BOLD.sub(r'\1', t.text)
                     t.text = MD_ITALIC.sub(r'\1', t.text)
+                    t.text = MD_BOLD_ALT.sub(r'\1', t.text)
+                    t.text = MD_STRIKE.sub(r'\1', t.text)
                     modified = True
 
         if modified:
@@ -251,8 +272,9 @@ def identify(text):
     """Identify heading level from paragraph text.
     Strips markdown decorators before pattern matching.
     Detection order (H3 → H2 → H1):
-      Heading 1: 一、二、三... / 1. / 2. / 摘要/ABSTRACT/参考文献/致谢/绪论/结论/附录X
-      Heading 2: （一）（二）...  or  1.1 / 2.3 (数字编号)
+      Heading 1: 第一章/第二章... / 一、二、三... / 1. / 2. /
+                 摘要/ABSTRACT/参考文献/致谢/绪论/结论/附录X/目录
+      Heading 2: （一）（二）... / 第一节... / 1.1 / 2.3 (数字编号)
       Heading 3: 1.1.1 / 2.3.4 (数字编号)
     """
     s = strip_md(text)  # Strip markdown (#, **, *) before matching
@@ -266,9 +288,17 @@ def identify(text):
     # Level 2
     if H2_NUM.match(s) or H2_CN.match(s):
         return 'Heading 2'
+    if H2_DI_JIE.match(s):          # 第一节, 第1节
+        return 'Heading 2'
 
-    # Level 1
+    # Level 1 — check most specific patterns first
+    if H1_DI_ZHANG.match(s):        # 第一章, 第1章
+        return 'Heading 1'
     if H1_CN.match(s) or H1_NUM.match(s):
+        return 'Heading 1'
+    if H1_CN_SPACE.match(s):        # 一 (bare, space after)
+        return 'Heading 1'
+    if H1_NUM_SPACE.match(s):       # 1 (bare, space after)
         return 'Heading 1'
     if s.startswith('附录'):
         return 'Heading 1'
@@ -277,6 +307,78 @@ def identify(text):
             return 'Heading 1'
 
     return None
+
+
+# ── Formatting-based heading inference ──────────────────────
+def infer_heading_from_formatting(paragraph):
+    """Fallback heading detection based on run-level formatting cues.
+
+    Examines the first run's font size (w:sz in half-points), bold state (w:b),
+    and paragraph alignment (w:jc). Returns 'Heading 1', 'Heading 2', 'Heading 3',
+    or None if formatting is ambiguous.
+
+    Heuristic rules (calibrated for Chinese academic conventions):
+      - Centered + bold + sz >= 30 (15pt)  → Heading 1 (小三)
+      - Bold + sz >= 28 (14pt)             → Heading 2 (四号)
+      - Bold + sz >= 24 (12pt)             → Heading 3 (小四)
+      - Rejects paragraphs longer than 80 chars (body text, not a heading)
+      - Rejects paragraphs that are not bold (headings are uniformly bold)
+    """
+    text = paragraph.text.strip()
+    if not text or len(text) > 80:
+        return None
+
+    pPr = paragraph._element.find(qn('w:pPr'))
+    alignment = None
+    if pPr is not None:
+        jc = pPr.find(qn('w:jc'))
+        if jc is not None:
+            alignment = jc.get(qn('w:val'))
+
+    runs = paragraph._element.findall(qn('w:r'))
+    if not runs:
+        return None
+
+    first_run = runs[0]
+    rPr = first_run.find(qn('w:rPr'))
+    if rPr is None:
+        return None
+
+    sz_elem = rPr.find(qn('w:sz'))
+    if sz_elem is None:
+        return None
+
+    try:
+        sz = int(sz_elem.get(qn('w:val')))  # half-points
+    except (ValueError, TypeError):
+        return None
+
+    is_bold = rPr.find(qn('w:b')) is not None
+    if not is_bold:
+        return None
+
+    # Centered + bold + 15pt+ → Heading 1 (小三)
+    if alignment == 'center' and sz >= 30:
+        return 'Heading 1'
+    # Bold + 14pt+ → Heading 2 (四号)
+    if sz >= 28:
+        return 'Heading 2'
+    # Bold + 12pt+ → Heading 3 (小四)
+    if sz >= 24:
+        return 'Heading 3'
+
+    return None
+
+
+def identify_paragraph(paragraph):
+    """Identify heading level using regex patterns first, then formatting fallback.
+    This should be used instead of identify(text) when the paragraph object
+    is available, so that formatting-based inference can act as a fallback."""
+    text = paragraph.text.strip()
+    result = identify(text)  # regex-based, uses strip_md internally
+    if result:
+        return result
+    return infer_heading_from_formatting(paragraph)
 
 
 # ── Section break (XML manipulation) ────────────────────────
@@ -427,9 +529,73 @@ def set_page_number_restart(section, start=1):
     pgNumType.set(qn('w:start'), str(start))
 
 
+def set_page_number_format(section, fmt='decimal', start=None):
+    """Set page number format (decimal, upperRoman, lowerRoman, etc.)
+    and optionally restart page numbering.
+
+    Args:
+        fmt: 'decimal', 'upperRoman', 'lowerRoman', 'upperLetter', etc.
+        start: If provided, restart page numbering at this value.
+    """
+    sectPr = section._sectPr
+    pgNumType = sectPr.find(qn('w:pgNumType'))
+    if pgNumType is None:
+        pgNumType = OxmlElement('w:pgNumType')
+        pgSz = sectPr.find(qn('w:pgSz'))
+        if pgSz is not None:
+            sectPr.insert(list(sectPr).index(pgSz), pgNumType)
+        else:
+            sectPr.insert(0, pgNumType)
+    pgNumType.set(qn('w:fmt'), fmt)
+    if start is not None:
+        pgNumType.set(qn('w:start'), str(start))
+
+
+def enable_even_odd_headers(section):
+    """Enable different odd/even page headers for a section."""
+    sectPr = section._sectPr
+    if sectPr.find(qn('w:evenAndOddHeaders')) is None:
+        even_odd = OxmlElement('w:evenAndOddHeaders')
+        pgSz = sectPr.find(qn('w:pgSz'))
+        if pgSz is not None:
+            sectPr.insert(list(sectPr).index(pgSz), even_odd)
+        else:
+            sectPr.insert(0, even_odd)
+
+
+def set_section_even_header(section, text, size_pt=10.5):
+    """Set centered header for even pages only.
+    Requires enable_even_odd_headers() to have been called on the section."""
+    try:
+        header = section.even_page_header
+        if header is None:
+            return
+        header.is_linked_to_previous = False
+        for p_elem in list(header._element):
+            if p_elem.tag == qn('w:p'):
+                header._element.remove(p_elem)
+        hp = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+        hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        hp.clear()
+        run = hp.add_run(text)
+        set_run_xml(run, size_pt, bold=False)
+    except Exception as e:
+        print(f"  [WARN] Even header setup failed: {e}")
+
+
 # ── Main pipeline ───────────────────────────────────────────
-def format_thesis(input_path, output_path, doc_title="论文", no_toc=False):
-    """Main formatting pipeline."""
+def format_thesis(input_path, output_path, doc_title="论文", no_toc=False,
+                  mode="xsyu_thesis", course_title=None):
+    """Main formatting pipeline.
+
+    Args:
+        input_path: Path to input .docx file
+        output_path: Path to output .docx file
+        doc_title: Document title (used as header text in XSYU mode)
+        no_toc: Skip TOC insertion message
+        mode: "xsyu_thesis" (XSYU formal thesis) or "homework" (daily assignment)
+        course_title: Header text for homework mode (falls back to doc_title if None)
+    """
 
     # ── Step 0: Backup existing output ──
     if os.path.exists(output_path):
@@ -455,7 +621,7 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False):
         text = p.text.strip()
         if not text:
             continue
-        h = identify(text)
+        h = identify_paragraph(p)
         if h:
             heading_map[i] = h
             if cover_end == 0:
@@ -527,7 +693,7 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False):
         text = p.text.strip()
         if not text:
             continue
-        h = identify(text)
+        h = identify_paragraph(p)
         if h == 'Heading 1':
             # 摘要/ABSTRACT are part of the cover, not a chapter
             is_abstract = (
@@ -784,7 +950,7 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False):
         text = p.text.strip()
         if not text:
             continue
-        h = identify(text)
+        h = identify_paragraph(p)
         if h == 'Heading 1' and H1_CN.match(text):
             # Skip special headings (摘要, 参考文献, 致谢, 附录, etc.)
             if text in SPECIAL_H1 or text.startswith('附录') \
@@ -802,7 +968,7 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False):
         text = p.text.strip()
         if not text:
             continue
-        h = identify(text)
+        h = identify_paragraph(p)
         if h:
             heading_map[i] = h
             if cover_end == 0:
@@ -821,53 +987,57 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False):
             elif t.startswith('附录'):
                 appendix_indices.append(idx)
 
-    # Fix cover_end: use first real chapter heading (一、二...), not 摘要
-    # This keeps title, abstract, and keywords on the same cover page
+    # Fix cover_end: use first real chapter heading, not front matter headings
+    # Front matter includes: 摘要, ABSTRACT, 目录, 鸣谢
+    # This keeps title, abstract, keywords, and TOC on the same cover page
     real_cover_end = cover_end
     for idx in sorted(heading_map):
         t = doc.paragraphs[idx].text.strip()
-        if heading_map[idx] == 'Heading 1' and t not in ('摘要',) \
-                and not t.startswith('摘要') and not t.startswith('摘　要') \
-                and t not in ('ABSTRACT', 'Abstract'):
-            real_cover_end = idx
-            break
+        if heading_map[idx] == 'Heading 1':
+            is_front = (
+                t in ('摘要', 'ABSTRACT', 'Abstract', '目录', '目 录', '鸣谢')
+                or t.startswith('摘要') or t.startswith('摘　要')
+                or t.startswith('目录') or t.startswith('目　录')
+            )
+            if not is_front:
+                real_cover_end = idx
+                break
     cover_end = real_cover_end
 
     # Recalculate section break positions with correct cover_end
-    # Find the first real body heading (排除摘要/ABSTRACT等)
-    first_body_heading_idx = None
-    for idx in sorted(heading_map):
-        if heading_map[idx] == 'Heading 1':
-            t = doc.paragraphs[idx].text.strip()
-            if t not in ('摘要', 'ABSTRACT', 'Abstract') \
-                    and not t.startswith('摘要') and not t.startswith('摘　要'):
-                first_body_heading_idx = idx
-                break
-
-    # 决定在哪里插入节分隔符：正文第一个标题之前（即前一个段落后）
     section_break_paras = set()
-    if first_body_heading_idx is not None and first_body_heading_idx > 0:
-        pre = first_body_heading_idx - 1
-        # 跳过空段落，找到真正的上一个非空段落
-        while pre >= 0 and not doc.paragraphs[pre].text.strip():
-            pre -= 1
-        if pre >= 0:
-            section_break_paras.add(pre)
-    elif cover_end > 0:
-        # 后备方案：如果没找到正文标题（不应该发生），则维持旧逻辑
-        last_cover = cover_end - 1
-        while last_cover >= 0 and not doc.paragraphs[last_cover].text.strip():
-            last_cover -= 1
-        if last_cover >= 0:
-            section_break_paras.add(last_cover)
+    section_plan = [{'title': '封面与摘要', 'is_front_matter': True}]  # Section 0 = front matter
 
-    # 仅在参考文献前插入分节符（不再对致谢、附录插入分节符）
-    if ref_idx is not None and ref_idx > 0:
-        pre = ref_idx - 1
-        while pre >= 0 and not doc.paragraphs[pre].text.strip():
-            pre -= 1
-        if pre >= 0 and pre not in section_break_paras:
-            section_break_paras.add(pre)
+    if mode == 'xsyu_thesis':
+        # XSYU mode: section break before EVERY H1 that is NOT front matter
+        # (摘要/ABSTRACT stay in section 0 with the cover)
+        for idx in sorted(heading_map):
+            if heading_map[idx] != 'Heading 1':
+                continue
+            t = doc.paragraphs[idx].text.strip()
+            is_front_matter = (
+                t == '摘要' or t.startswith('摘要') or t.startswith('摘　要')
+                or t == 'ABSTRACT' or t == 'Abstract'
+                or t == '目录' or t == '目 录' or t.startswith('目录')
+                or t == '鸣谢'
+            )
+            if is_front_matter:
+                continue
+            # Insert section break immediately before this heading
+            if idx > 0:
+                pre = idx - 1
+                while pre >= 0 and not doc.paragraphs[pre].text.strip():
+                    pre -= 1
+                if pre >= 0 and pre not in section_break_paras:
+                    section_break_paras.add(pre)
+                    section_plan.append({
+                        'title': t,
+                        'is_front_matter': False
+                    })
+    elif mode == 'homework':
+        # Homework mode: no section breaks — entire document is one continuous section
+        section_break_paras = set()
+        section_plan = [{'title': course_title or doc_title, 'is_front_matter': False}]
 
     # Apply Heading styles to cover-area headings (before cover_end)
     for idx in sorted(heading_map):
@@ -878,7 +1048,8 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False):
 
     print(f"[5] Re-scanned: {len(heading_map)} headings, "
           f"cover_end=P{cover_end}, ref=P{ref_idx}, "
-          f"section_breaks={sorted(section_break_paras)}")
+          f"section_breaks={sorted(section_break_paras)}, "
+          f"mode={mode}")
 
     # ── Step 5b: Clear old section breaks from previous formatting runs ──
     old_breaks = clear_all_section_breaks(doc)
@@ -891,9 +1062,7 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False):
         add_section_break_at(para)
     print(f"[6] Section breaks inserted: {sorted(section_break_paras)}")
 
-    # ── Step 7: No page breaks between chapters (chapters flow continuously) ──
-    # Page breaks between chapters are intentionally NOT inserted.
-    # Only section breaks (after cover, before references) provide structural separation.
+    # ── Step 7: Page breaks — intentionally none (chapters flow continuously) ──
     print(f"[7] Page breaks: 0 (chapters flow continuously)")
 
     # ── Step 8: Format body paragraphs ──
@@ -994,22 +1163,44 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False):
         sec.bottom_margin = Cm(2.5)
 
     num_sections = len(doc2.sections)
-    print(f"[10] Reloaded: {num_sections} sections detected")
+    print(f"[10] Reloaded: {num_sections} sections detected, mode={mode}")
 
-    # Configure headers/footers per section
+    # Configure headers/footers per section (mode-dependent)
     for i, sec in enumerate(doc2.sections):
-        if i == 0:
-            # Section 0 = Cover: NO header, NO footer
-            clear_header_footer(sec)
-            print(f"  Section {i} (cover): header/footer cleared")
-        else:
-            # Section 1+ = Body/References/etc.: header + page number footer
-            set_section_header(sec, doc_title, size_pt=10.5)
+        # Get section info from plan (may have fewer entries than actual sections)
+        info = section_plan[i] if i < len(section_plan) else {
+            'title': course_title or doc_title,
+            'is_front_matter': False
+        }
+
+        if mode == 'homework':
+            # Simple: every section gets same header + continuous page numbers
+            set_section_header(sec, course_title or doc_title, size_pt=10.5)
             set_section_footer_page_number(sec, size_pt=10.5)
-            if i == 1:
-                # Body section: restart page numbering at 1
+            if i == 0:
                 set_page_number_restart(sec, 1)
-            print(f"  Section {i}: header='{doc_title}', footer=page#")
+            print(f"  Section {i}: header='{course_title or doc_title}', footer=page#")
+
+        elif mode == 'xsyu_thesis':
+            if info['is_front_matter']:
+                # Front matter: no header, Roman numeral page numbers
+                clear_header_footer(sec)
+                set_section_footer_page_number(sec, size_pt=10.5)
+                set_page_number_format(sec, 'upperRoman')
+                print(f"  Section {i} (front matter): Roman numerals, no header")
+            else:
+                # Body chapter: odd/even headers
+                enable_even_odd_headers(sec)
+                chapter_title = info['title']
+                set_section_header(sec, chapter_title, size_pt=10.5)         # odd pages
+                set_section_even_header(sec, "西安石油大学本科毕业设计(论文)", size_pt=10.5)  # even
+                set_section_footer_page_number(sec, size_pt=10.5)
+                if i == 1:
+                    # First body section: restart page numbering at 1 (decimal)
+                    set_page_number_format(sec, 'decimal', start=1)
+                else:
+                    set_page_number_format(sec, 'decimal')
+                print(f"  Section {i}: odd='{chapter_title}', even='西安石油大学本科毕业设计(论文)'")
 
     # ── Step 9: Save final ──
     doc2.save(output_path)
@@ -1022,12 +1213,14 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False):
 
     print(f"\n{'='*60}")
     print(f"DONE: {output_path}")
+    print(f"Mode: {mode}")
     print(f"Sections: {num_sections}")
-    print(f"Cover: separate section (no header/footer)")
-    print(f"Body: header='{doc_title}', footer=page numbers")
-    if ref_idx is not None:
-        print(f"References: separate section at P{ref_idx}")
-    print(f"Chapters flow continuously (no page breaks between them)")
+    if mode == 'xsyu_thesis':
+        print(f"Front matter: Roman numeral pages (Ⅰ, Ⅱ, Ⅲ...)")
+        print(f"Body chapters: odd/even headers, Arabic page numbers from 1")
+    else:
+        print(f"Header: '{course_title or doc_title}'")
+        print(f"Continuous page numbers, no section breaks")
     if not no_toc:
         print(f"TOC: Insert in Word → References → Table of Contents → Auto Table")
     print(f"{'='*60}")
@@ -1040,9 +1233,12 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Formal XSYU thesis (default)
   python thesis_formatter.py paper.docx
   python thesis_formatter.py paper.docx output.docx --doc-title="毕业论文"
-  python thesis_formatter.py paper.docx --no-toc
+
+  # Daily homework mode
+  python thesis_formatter.py paper.docx --mode=homework --course-title="高级财务管理"
         """)
     parser.add_argument('input', nargs='?', default=None,
                         help='Input .docx file path')
@@ -1052,6 +1248,12 @@ Examples:
                         help='Header text / document title (default: 论文)')
     parser.add_argument('--no-toc', action='store_true',
                         help='Skip TOC insertion message')
+    parser.add_argument('--mode', default='xsyu_thesis',
+                        choices=['xsyu_thesis', 'homework'],
+                        help='Formatting mode: xsyu_thesis (XSYU formal thesis) '
+                             'or homework (daily assignment)')
+    parser.add_argument('--course-title', default=None,
+                        help='Course name for header (homework mode only)')
 
     args = parser.parse_args()
 
@@ -1066,7 +1268,8 @@ Examples:
         print(f"ERROR: Input file not found: {args.input}")
         sys.exit(1)
 
-    format_thesis(args.input, args.output, args.doc_title, args.no_toc)
+    format_thesis(args.input, args.output, args.doc_title, args.no_toc,
+                  mode=args.mode, course_title=args.course_title)
 
 
 if __name__ == "__main__":
