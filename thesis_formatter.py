@@ -645,29 +645,35 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False,
           f"cover ends at P{cover_end}, ref=P{ref_idx}, "
           f"thanks=P{thanks_idx}, appendices={appendix_indices}")
 
-    # ── Step 2: Apply styles ──
-    config_style(doc.styles['Normal'], 12, False, WD_ALIGN_PARAGRAPH.JUSTIFY,
+        # ── Step 2: Apply styles ──
+    def ensure_style(doc, name):
+        try:
+            return doc.styles[name]
+        except KeyError:
+            return doc.styles.add_style(name, 1)  # 1 = paragraph style
+
+    config_style(ensure_style(doc, 'Normal'), 12, False, WD_ALIGN_PARAGRAPH.JUSTIFY,
                  first_indent=Pt(24), line_spacing=1.25,
                  space_before=Pt(0), space_after=Pt(0))
-    config_style(doc.styles['Heading 1'], 15, True, WD_ALIGN_PARAGRAPH.CENTER,
+    config_style(ensure_style(doc, 'Heading 1'), 15, True, WD_ALIGN_PARAGRAPH.CENTER,
                  first_indent=Pt(0), line_spacing=1.25,
                  space_before=Pt(12), space_after=Pt(24))
-    config_style(doc.styles['Heading 2'], 14, True, WD_ALIGN_PARAGRAPH.LEFT,
+    config_style(ensure_style(doc, 'Heading 2'), 14, True, WD_ALIGN_PARAGRAPH.LEFT,
                  first_indent=Pt(0), line_spacing=1.25,
                  space_before=Pt(6), space_after=Pt(6))
-    config_style(doc.styles['Heading 3'], 12, True, WD_ALIGN_PARAGRAPH.LEFT,
+    config_style(ensure_style(doc, 'Heading 3'), 12, True, WD_ALIGN_PARAGRAPH.LEFT,
                  first_indent=Pt(0), line_spacing=1.25,
                  space_before=Pt(6), space_after=Pt(6))
-    config_style(doc.styles['List Paragraph'], 10.5, False,
+    config_style(ensure_style(doc, 'List Paragraph'), 10.5, False,
                  WD_ALIGN_PARAGRAPH.JUSTIFY,
                  first_indent=Pt(0), left_indent=Pt(0), line_spacing=1.25,
                  space_before=Pt(0), space_after=Pt(0))
     try:
-        config_style(doc.styles['toc 1'], 12, False, WD_ALIGN_PARAGRAPH.LEFT,
+        config_style(ensure_style(doc, 'toc 1'), 12, False, WD_ALIGN_PARAGRAPH.LEFT,
                      first_indent=Pt(0), line_spacing=1.2)
-        config_style(doc.styles['toc 2'], 12, False, WD_ALIGN_PARAGRAPH.LEFT,
+        config_style(ensure_style(doc, 'toc 2'), 12, False, WD_ALIGN_PARAGRAPH.LEFT,
                      first_indent=Pt(0), left_indent=Pt(24))
-        config_style(doc.styles['toc 3'], 12, False, WD_ALIGN_PARAGRAPH.LEFT,
+        config_style(ensure_style(doc, 'toc 3'), 12, False, WD_ALIGN_PARAGRAPH.LEFT,
                      first_indent=Pt(0), left_indent=Pt(48))
     except Exception:
         pass
