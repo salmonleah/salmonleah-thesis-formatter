@@ -645,7 +645,7 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False,
           f"cover ends at P{cover_end}, ref=P{ref_idx}, "
           f"thanks=P{thanks_idx}, appendices={appendix_indices}")
 
-        # ── Step 2: Apply styles ──
+    # ── Step 2: Apply styles ──
     def ensure_style(doc, name):
         try:
             return doc.styles[name]
@@ -949,38 +949,63 @@ def format_thesis(input_path, output_path, doc_title="论文", no_toc=False,
 
         print(f"[4d] Keywords formatted: P{keywords_idx}")
 
-    # ── Step 4e: Insert TOC placeholder after keywords (XSYU mode only) ──
-    # Creates a blank paragraph that serves as the TOC section between
-    # the abstract section (no page numbers) and body chapters.
+    # ── Step 4e: Insert TOC field after keywords (XSYU mode only) ──
+    # Creates a paragraph containing a TOC field instruction.
+    # When opened in Word, it will prompt to update the TOC automatically.
     toc_placeholder_idx = None
-    if mode == 'xsyu_thesis' and keywords_idx is not None:
+    if mode == 'xsyu_thesis' and keywords_idx is not None and not no_toc:
+        # Create a new paragraph with a TOC field.
+        # IMPORTANT: Per OOXML spec, each fldChar and instrText MUST be in its
+        # own w:r (run) element. Putting them all in a single run produces a
+        # malformed field that Word silently ignores — the TOC won't render.
+        new_p = OxmlElement('w:p')
+
+        # Run 1: Field begin marker
+        r1 = OxmlElement('w:r')
+        fldChar_begin = OxmlElement('w:fldChar')
+        fldChar_begin.set(qn('w:fldCharType'), 'begin')
+        r1.append(fldChar_begin)
+        new_p.append(r1)
+
+        # Run 2: Field instruction (incl. leading/trailing spaces per convention)
+        r2 = OxmlElement('w:r')
+        instrText = OxmlElement('w:instrText')
+        instrText.set(qn('xml:space'), 'preserve')
+        instrText.text = ' TOC \\o "1-3" \\h \\z \\u '  # outline levels 1-3, hyperlinks, tab leaders, outline levels
+        r2.append(instrText)
+        new_p.append(r2)
+
+        # Run 3: Field separator
+        r3 = OxmlElement('w:r')
+        fldChar_sep = OxmlElement('w:fldChar')
+        fldChar_sep.set(qn('w:fldCharType'), 'separate')
+        r3.append(fldChar_sep)
+        new_p.append(r3)
+
+        # Run 4: Field end marker
+        r4 = OxmlElement('w:r')
+        fldChar_end = OxmlElement('w:fldChar')
+        fldChar_end.set(qn('w:fldCharType'), 'end')
+        r4.append(fldChar_end)
+        new_p.append(r4)
+
+        # Insert after keywords paragraph
+        doc.paragraphs[keywords_idx]._element.addnext(new_p)
+        toc_placeholder_idx = keywords_idx + 1
+        # Shift indices if needed
+        if abstract_body_idx is not None and abstract_body_idx > keywords_idx:
+            abstract_body_idx += 1
+        print(f"[4e] TOC field inserted at P{toc_placeholder_idx} (XSYU mode)")
+    elif mode == 'xsyu_thesis' and keywords_idx is not None and no_toc:
+        # If --no-toc, insert a blank paragraph as before (optional)
         toc_p = OxmlElement('w:p')
-        # Add an empty run so the paragraph exists but has no visible text
         toc_r = OxmlElement('w:r')
         toc_p.append(toc_r)
         doc.paragraphs[keywords_idx]._element.addnext(toc_p)
         toc_placeholder_idx = keywords_idx + 1
-        # Shift indices for affected elements
         if abstract_body_idx is not None and abstract_body_idx > keywords_idx:
             abstract_body_idx += 1
-        print(f"[4e] TOC placeholder inserted at P{toc_placeholder_idx} (XSYU mode)")
-
-    # ── Step 4f: Rename Chinese numeral H1 headings to Arabic ──
-    #  一、XXX → 1. XXX,  二、XXX → 2. XXX, etc.
-    h1_renamed = 0
-    for i, p in enumerate(doc.paragraphs):
-        text = p.text.strip()
-        if not text:
-            continue
-        h = identify_paragraph(p)
-        if h == 'Heading 1' and H1_CN.match(text):
-            # Skip special headings (摘要, 参考文献, 致谢, 附录, etc.)
-            if text in SPECIAL_H1 or text.startswith('附录') \
-                    or text.startswith('摘要') or text.startswith('摘　要'):
-                continue
-            if rename_h1_cn_to_arabic(p):
-                h1_renamed += 1
-    print(f"[4e] H1 CN→Arabic renamed: {h1_renamed} headings")
+        print(f"[4e] TOC placeholder (blank) inserted at P{toc_placeholder_idx} (--no-toc)")
 
     # ── Re-scan document structure after cover modifications ──
     # (Paragraph insertions may have shifted indices)
